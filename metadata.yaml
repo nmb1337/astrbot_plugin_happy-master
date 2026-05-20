@@ -1,0 +1,9 @@
+name: astrbot_plugin_anti_recall # 插件唯一识别名，以 astrbot_plugin_ 前缀开头
+display_name: 反撤回小助手 # 用于展示的名字
+desc: 群里有人撤回消息时，艾特那个人并把撤回的消息发出来 # 插件简短描述
+short_desc: 反撤回消息，自动复读被撤回的内容
+version: v1.0.0 # 插件版本号
+author: Happy # 作者
+repo: https://github.com/example/astrbot_plugin_anti_recall # 插件的仓库地址
+support_platforms:
+  - aiocqhttp

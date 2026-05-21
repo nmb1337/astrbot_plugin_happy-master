@@ -1,6 +1,8 @@
 """
 反撤回插件 (Anti-Recall)
 监听群聊中的撤回事件，艾特撤回者并将被撤回的消息重新发送出来。
+
+支持的平台：aiocqhttp (OneBot v11, 如 NapCat / Lagrange)
 """
 
 import time
@@ -29,87 +31,115 @@ class AntiRecall(Star):
         """插件初始化时调用"""
         logger.info("[反撤回] 插件已加载，开始守护群聊消息~")
 
-    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    # 同时使用 ALL 消息类型 + AIOCQHTTP 平台过滤，确保不漏事件
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     async def on_group_event(self, event: AstrMessageEvent):
         """监听所有群聊消息事件，缓存消息并在检测到撤回时发出提醒"""
         abm = event.message_obj
         raw = abm.raw_message
 
-        # 尝试以 dict 方式读取原始事件（兼容 aiocqhttp / OneBot v11）
+        # ---------- 解析 raw_message ----------
+        # aiocqhttp 的 raw_message 是 dict-like 的 Event 对象
         try:
-            get = raw.get if hasattr(raw, "get") else None
-        except Exception:
-            return
-        if get is None:
+            post_type = raw.get("post_type", "")
+        except Exception as e:
+            logger.info(
+                f"[反撤回] 无法读取 raw_message (type={type(raw).__name__})，"
+                f"可能不是 OneBot 事件，跳过。err={e}"
+            )
             return
 
-        post_type = get("post_type", "")
+        if post_type == "notice":
+            logger.info(
+                f"[反撤回] 收到通知事件 notice_type={raw.get('notice_type', '?')}"
+            )
 
         if post_type == "message":
             # ---------- 普通消息：缓存 ----------
-            group_id = str(get("group_id", ""))
-            message_id = str(get("message_id", ""))
-            sender = get("sender", {})
-            sender_id = str(sender.get("user_id", "")) if isinstance(sender, dict) else ""
-            sender_name = ""
+            group_id = str(raw.get("group_id", ""))
+            if not group_id:
+                return  # 非群聊消息，跳过
+
+            message_id = str(raw.get("message_id", ""))
+            if not message_id:
+                return
+
+            sender = raw.get("sender", {})
             if isinstance(sender, dict):
                 sender_name = sender.get("card") or sender.get("nickname", "未知")
+                sender_id = str(sender.get("user_id", ""))
+            else:
+                sender_name = "未知"
+                sender_id = ""
 
-            if group_id and message_id:
-                self._cache[group_id][message_id] = {
-                    "content": abm.message_str or "[非文本消息]",
-                    "sender_id": sender_id,
-                    "sender_name": sender_name,
-                    "timestamp": time.time(),
-                }
+            self._cache[group_id][message_id] = {
+                "content": abm.message_str or "[非文本消息]",
+                "sender_id": sender_id,
+                "sender_name": sender_name,
+                "timestamp": time.time(),
+            }
 
         elif post_type == "notice":
             # ---------- 通知事件：检查是否为撤回 ----------
-            notice_type = get("notice_type", "")
+            notice_type = raw.get("notice_type", "")
             if notice_type != "group_recall":
                 return
 
-            group_id = str(get("group_id", ""))
-            message_id = str(get("message_id", ""))
-            # user_id: 被撤回消息的原发送者
-            # operator_id: 执行撤回操作的人（可能是本人或管理员）
-            operator_id = str(get("operator_id", ""))
-            user_id = str(get("user_id", ""))
+            # 撤回事件关键字段
+            group_id = str(raw.get("group_id", ""))
+            message_id = str(raw.get("message_id", ""))  # 被撤回的消息 ID
+            user_id = str(raw.get("user_id", ""))  # 被撤回消息的原发送者
+            operator_id = str(raw.get("operator_id", ""))  # 执行撤回操作的人
 
-            # 优先艾特执行撤回的人
+            logger.info(
+                f"[反撤回] 检测到撤回事件 group={group_id} "
+                f"msg_id={message_id} operator={operator_id} user={user_id}"
+            )
+
+            # 艾特目标：执行撤回的人（若为空则艾特原发送者）
             at_target = operator_id or user_id
+            if not at_target:
+                logger.warning("[反撤回] 未找到撤回者 ID，放弃发送")
+                return
 
-            # 查找缓存
+            # 从缓存中查找被撤回的消息
             cached = self._cache.get(group_id, {}).pop(message_id, None)
 
-            # 定期清理过期缓存
+            # 清理过期缓存
             self._clean_expired(group_id)
 
             if cached:
                 original_sender = cached["sender_name"] or "未知"
                 original_content = cached["content"] or "[空消息]"
 
-                # 如果撤回者和原发送者不同，补充说明
+                logger.info(
+                    f"[反撤回] 缓存命中，原发送者={original_sender}，"
+                    f"内容预览={original_content[:50]}"
+                )
+
+                # 区分自己撤回和管理员代撤
                 if operator_id and user_id and operator_id != user_id:
-                    chain = [
-                        Comp.At(qq=at_target),
-                        Comp.Plain(
-                            f" 撤回了 {original_sender} 的一条消息：\n{original_content}"
-                        ),
-                    ]
+                    text = f" 撤回了 {original_sender} 的一条消息：\n{original_content}"
                 else:
-                    chain = [
-                        Comp.At(qq=at_target),
-                        Comp.Plain(f" 撤回了自己的一条消息：\n{original_content}"),
-                    ]
-                yield event.chain_result(chain)
+                    text = f" 撤回了自己的一条消息：\n{original_content}"
+
+                chain = [Comp.At(qq=at_target), Comp.Plain(text)]
+                try:
+                    yield event.chain_result(chain)
+                except Exception as e:
+                    logger.error(f"[反撤回] 发送消息失败: {e}")
+
             else:
-                # 缓存未命中
+                logger.info("[反撤回] 缓存未命中，消息可能已过期")
                 chain = [
-                    Comp.At(qq=at_target) if at_target else Comp.Plain(""),
+                    Comp.At(qq=at_target),
                     Comp.Plain(" 刚刚撤回了条消息，但我没来得及记录 😢"),
                 ]
-                yield event.chain_result(chain)
+                try:
+                    yield event.chain_result(chain)
+                except Exception as e:
+                    logger.error(f"[反撤回] 发送消息失败: {e}")
 
     def _clean_expired(self, group_id: str) -> None:
         """清理指定群聊中过期的消息缓存"""
@@ -118,6 +148,16 @@ class AntiRecall(Star):
         expired = [
             mid
             for mid, data in cache.items()
+            if now - data.get("timestamp", 0) > self._cache_ttl
+        ]
+        for mid in expired:
+            del cache[mid]
+
+    async def terminate(self):
+        """插件卸载时调用"""
+        logger.info("[反撤回] 插件已卸载")
+        self._cache.clear()
+
             if now - data.get("timestamp", 0) > self._cache_ttl
         ]
         for mid in expired:

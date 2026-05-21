@@ -50,11 +50,6 @@ class AntiRecall(Star):
             )
             return
 
-        if post_type == "notice":
-            logger.info(
-                f"[反撤回] 收到通知事件 notice_type={raw.get('notice_type', '?')}"
-            )
-
         if post_type == "message":
             # ---------- 普通消息：缓存 ----------
             group_id = str(raw.get("group_id", ""))
@@ -83,6 +78,11 @@ class AntiRecall(Star):
         elif post_type == "notice":
             # ---------- 通知事件：检查是否为撤回 ----------
             notice_type = raw.get("notice_type", "")
+
+            logger.info(
+                f"[反撤回] 收到通知事件 notice_type={notice_type}"
+            )
+
             if notice_type != "group_recall":
                 return
 
@@ -158,13 +158,4 @@ class AntiRecall(Star):
         logger.info("[反撤回] 插件已卸载")
         self._cache.clear()
 
-            if now - data.get("timestamp", 0) > self._cache_ttl
-        ]
-        for mid in expired:
-            del cache[mid]
-
-    async def terminate(self):
-        """插件卸载时调用"""
-        logger.info("[反撤回] 插件已卸载")
-        self._cache.clear()
 

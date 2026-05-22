@@ -28,8 +28,11 @@ class AntiRecall(Star):
         self._cache_ttl: int = 600  # 缓存过期时间（秒），默认 10 分钟
         # 白名单配置
         self._whitelist: list[str] = []
+        # 群白名单：只有列表内的群才启用反撤回，空列表表示全部群启用
+        self._group_whitelist: list[str] = []
         if config and isinstance(config, dict):
             self._whitelist = [str(u) for u in config.get("whitelist", [])]
+            self._group_whitelist = [str(g) for g in config.get("group_whitelist", [])]
         # 群成员角色缓存：group_id -> {user_id: role}，避免频繁调 API
         self._role_cache: dict[str, dict[str, str]] = defaultdict(dict)
 
@@ -49,6 +52,7 @@ class AntiRecall(Star):
         # aiocqhttp 的 raw_message 是 dict-like 的 Event 对象
         try:
             post_type = raw.get("post_type", "")
+            group_id = str(raw.get("group_id", ""))
         except Exception as e:
             logger.info(
                 f"[反撤回] 无法读取 raw_message (type={type(raw).__name__})，"
@@ -56,9 +60,13 @@ class AntiRecall(Star):
             )
             return
 
+        # 群白名单检查：配置了白名单时，只处理白名单内的群
+        if self._group_whitelist and group_id:
+            if group_id not in self._group_whitelist:
+                return
+
         if post_type == "message":
             # ---------- 普通消息：缓存 ----------
-            group_id = str(raw.get("group_id", ""))
             if not group_id:
                 return  # 非群聊消息，跳过
 
@@ -93,7 +101,6 @@ class AntiRecall(Star):
                 return
 
             # 撤回事件关键字段
-            group_id = str(raw.get("group_id", ""))
             message_id = str(raw.get("message_id", ""))  # 被撤回的消息 ID
             user_id = str(raw.get("user_id", ""))  # 被撤回消息的原发送者
             operator_id = str(raw.get("operator_id", ""))  # 执行撤回操作的人

@@ -21,11 +21,17 @@ import astrbot.api.message_components as Comp
     "1.0.0",
 )
 class AntiRecall(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
         # 消息缓存：group_id -> {message_id: {content, sender_id, sender_name, timestamp}}
         self._cache: dict[str, dict] = defaultdict(dict)
         self._cache_ttl: int = 600  # 缓存过期时间（秒），默认 10 分钟
+        # 白名单配置
+        self._whitelist: list[str] = []
+        if config and isinstance(config, dict):
+            self._whitelist = [str(u) for u in config.get("whitelist", [])]
+        # 群成员角色缓存：group_id -> {user_id: role}，避免频繁调 API
+        self._role_cache: dict[str, dict[str, str]] = defaultdict(dict)
 
     async def initialize(self):
         """插件初始化时调用"""
@@ -103,6 +109,13 @@ class AntiRecall(Star):
                 logger.warning("[反撤回] 未找到撤回者 ID，放弃发送")
                 return
 
+            # 检查撤回者是否豁免（管理员/群主/白名单）
+            if await self._is_exempt(operator_id, group_id, event):
+                logger.info(
+                    f"[反撤回] operator={operator_id} 在豁免名单中，跳过通知"
+                )
+                return
+
             # 从缓存中查找被撤回的消息
             cached = self._cache.get(group_id, {}).pop(message_id, None)
 
@@ -141,6 +154,59 @@ class AntiRecall(Star):
                 except Exception as e:
                     logger.error(f"[反撤回] 发送消息失败: {e}")
 
+    async def _is_exempt(
+        self, operator_id: str, group_id: str, event: AstrMessageEvent
+    ) -> bool:
+        """判断撤回操作者是否应被豁免（不触发反撤回通知）。
+
+        豁免条件（满足任一即豁免）：
+        1. 在白名单中
+        2. 是群主或管理员
+        """
+        if not operator_id or not group_id:
+            return False
+
+        # 条件 1：检查白名单
+        if operator_id in self._whitelist:
+            return True
+
+        # 条件 2：检查是否为群主/管理员
+        # 优先查缓存，减少 API 调用
+        cached_role = self._role_cache.get(group_id, {}).get(operator_id)
+        if cached_role:
+            return cached_role in ("owner", "admin")
+
+        # 通过 OneBot API 查询群成员角色
+        try:
+            if event.get_platform_name() != "aiocqhttp":
+                return False
+
+            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
+                AiocqhttpMessageEvent,
+            )
+
+            if not isinstance(event, AiocqhttpMessageEvent):
+                return False
+
+            info = await event.bot.call_action(
+                action="get_group_member_info",
+                group_id=int(group_id),
+                user_id=int(operator_id),
+                no_cache=False,
+            )
+            role = str(info.get("role", "member"))
+            # 缓存角色，避免重复查询
+            self._role_cache[group_id][operator_id] = role
+
+            logger.info(
+                f"[反撤回] 查询到 operator={operator_id} 的角色={role}"
+            )
+            return role in ("owner", "admin")
+
+        except Exception as e:
+            logger.warning(f"[反撤回] 获取群成员角色失败: {e}")
+            return False
+
     def _clean_expired(self, group_id: str) -> None:
         """清理指定群聊中过期的消息缓存"""
         now = time.time()
@@ -157,5 +223,4 @@ class AntiRecall(Star):
         """插件卸载时调用"""
         logger.info("[反撤回] 插件已卸载")
         self._cache.clear()
-
 

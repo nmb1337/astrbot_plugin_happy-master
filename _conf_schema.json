@@ -1,0 +1,8 @@
+{
+    "whitelist": {
+        "type": "list",
+        "description": "反撤回白名单（QQ号），白名单内用户撤回消息不会被复读。群主和管理员默认豁免，无需添加。",
+        "default": [],
+        "required": false
+    }
+}

@@ -50,6 +50,8 @@ class AntiRecall(Star):
 
         # ---------- 解析 raw_message ----------
         # aiocqhttp 的 raw_message 是 dict-like 的 Event 对象
+        if raw is None:
+            return
         try:
             post_type = raw.get("post_type", "")
             group_id = str(raw.get("group_id", ""))
@@ -88,6 +90,10 @@ class AntiRecall(Star):
                 "sender_name": sender_name,
                 "timestamp": time.time(),
             }
+            # 顺便缓存发送者角色（OneBot 消息事件 sender 中自带 role）
+            sender_role = sender.get("role", "") if isinstance(sender, dict) else ""
+            if sender_id and sender_role:
+                self._role_cache[group_id][sender_id] = sender_role
 
         elif post_type == "notice":
             # ---------- 通知事件：检查是否为撤回 ----------
@@ -117,7 +123,12 @@ class AntiRecall(Star):
                 return
 
             # 检查撤回者是否豁免（管理员/群主/白名单）
-            if await self._is_exempt(operator_id, group_id, event):
+            try:
+                exempt = await self._is_exempt(operator_id, group_id, event)
+            except Exception as e:
+                logger.warning(f"[反撤回] 豁免检查异常: {e}，默认不豁免")
+                exempt = False
+            if exempt:
                 logger.info(
                     f"[反撤回] operator={operator_id} 在豁免名单中，跳过通知"
                 )
@@ -178,12 +189,12 @@ class AntiRecall(Star):
             return True
 
         # 条件 2：检查是否为群主/管理员
-        # 优先查缓存，减少 API 调用
+        # 优先查缓存（消息事件已预缓存发送者角色，撤回时无需调 API）
         cached_role = self._role_cache.get(group_id, {}).get(operator_id)
         if cached_role:
             return cached_role in ("owner", "admin")
 
-        # 通过 OneBot API 查询群成员角色
+        # 缓存未命中，通过 OneBot API 查询（仅在用户从未发过消息时触发）
         try:
             if event.get_platform_name() != "aiocqhttp":
                 return False
@@ -202,15 +213,15 @@ class AntiRecall(Star):
                 no_cache=False,
             )
             role = str(info.get("role", "member"))
-            # 缓存角色，避免重复查询
             self._role_cache[group_id][operator_id] = role
 
             logger.info(
-                f"[反撤回] 查询到 operator={operator_id} 的角色={role}"
+                f"[反撤回] API 查询到 operator={operator_id} 的角色={role}"
             )
             return role in ("owner", "admin")
 
         except Exception as e:
+            # API 调用失败（网络超时等），默认不豁免
             logger.warning(f"[反撤回] 获取群成员角色失败: {e}")
             return False
 

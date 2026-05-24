@@ -1,14 +1,14 @@
 {
     "group_whitelist": {
         "type": "list",
-        "description": "群白名单（群号），只有白名单内的群才会启用反撤回。留空表示所有群都启用。",
+        "description": "群白名单（群号），只有列表内的群才会启用反撤回。留空表示所有群都生效。",
         "default": [],
-        "required": false
+        "hint": "示例：[\"123456789\", \"987654321\"]"
     },
     "whitelist": {
         "type": "list",
-        "description": "反撤回用户白名单（QQ号），白名单内用户撤回消息不会被复读。群主和管理员默认豁免，无需添加。",
+        "description": "用户白名单（QQ号），白名单内用户撤回消息不会被复读。",
         "default": [],
-        "required": false
+        "hint": "群主和管理员默认豁免，无需添加到此列表。示例：[\"123456789\"]"
     }
 }

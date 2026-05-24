@@ -71,10 +71,16 @@ Bot: @用户A 撤回了自己的一条消息：
 
 无额外依赖，仅使用 AstrBot 内置 API。
 
+## 版本历史
+
+| 版本 | 更新内容 |
+|------|----------|
+| v1.0.0 | 基础反撤回功能 |
+| v1.1.0 | 群主/管理员默认豁免 + 用户白名单 |
+| v1.2.0 | 新增群白名单，只对指定群生效 |
+
 ## 相关链接
 
 - [AstrBot 插件开发文档](https://docs.astrbot.app/dev/star/plugin-new.html)
-- [AstrBot 项目](https://github.com/AstrBotDevs/AstrBot)
-
 - [AstrBot 项目](https://github.com/AstrBotDevs/AstrBot)
 
